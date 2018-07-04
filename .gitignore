@@ -1,3 +1,7 @@
 pi-env/
 datasets/*
 !datasets/README
+.ipynb_checkpoints/
+__pycache__/
+scratch.py
+output/

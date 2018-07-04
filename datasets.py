@@ -8,6 +8,9 @@ import os
 import pickle
 import requests
 import tarfile
+import torch
+
+from torch.utils.data import Dataset
 
 CIFAR10_DIR = 'datasets/cifar-10-batches-py/'
 MNIST_DIR = 'datasets/mnist/'
@@ -17,6 +20,19 @@ MNIST_URLS = [
     'http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz',
     'http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz',
 ]
+
+
+class MyDataset(Dataset):
+    def __init__(self, x, y):
+        assert x.shape[0] == y.shape[0], 'Data and label shape mismatch'
+        self.x = x
+        self.y = y
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return torch.from_numpy(self.x[idx]), torch.from_numpy(self.y[idx])
 
 
 def get_cifar10():
@@ -37,14 +53,16 @@ def get_cifar10():
             data = pickle.load(f, encoding='bytes')
             train_data.append(data[b'data'])
             train_labels.append(data[b'labels'])
+    train_data = np.concatenate(train_data).astype(np.float32)
+    train_labels = np.concatenate(train_labels).astype(np.float32)
 
     # Load the test data
     with open(CIFAR10_DIR + 'test_batch', 'rb') as f:
         data = pickle.load(f, encoding='bytes')
-        test_data = data[b'data']
-        test_labels = data[b'labels']
-    return (np.concatenate(train_data), np.concatenate(train_labels),
-            test_data, np.array(test_labels))
+        test_data = data[b'data'].astype(np.float32)
+        test_labels = np.array(data[b'labels'], dtype=np.float32)
+    return (MyDataset(train_data, train_labels),
+            MyDataset(test_data, test_labels))
 
 
 def get_mnist():
@@ -60,20 +78,15 @@ def get_mnist():
 
     loader = mnist.MNIST(MNIST_DIR, return_type='numpy')
     train_data, train_labels = loader.load_training()
+    train_data = train_data.astype(np.float32)
+    train_labels = train_labels.astype(np.float32)
     test_data, test_labels = loader.load_testing()
+    test_data = test_data.astype(np.float32)
+    test_labels = test_labels.astype(np.float32)
+
     return train_data, train_labels, test_data, test_labels
 
 
 if __name__ == '__main__':
-    c10_train_data, c10_train_labels, c10_test_data, c10_test_labels = \
-        get_cifar10()
-    print(c10_train_data)
-    print(c10_train_data.shape)
-    print(c10_train_labels)
-    print(c10_train_labels.shape)
-    print(c10_test_data)
-    print(c10_test_data.shape)
-    print(c10_test_labels)
-    print(c10_test_labels.shape)
-
-    print(get_mnist())
+    get_cifar10()
+    get_mnist()
