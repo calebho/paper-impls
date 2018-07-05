@@ -23,8 +23,9 @@ MNIST_URLS = [
 
 
 class MyDataset(Dataset):
-    def __init__(self, x, y):
-        assert x.shape[0] == y.shape[0], 'Data and label shape mismatch'
+    def __init__(self, x, y=None):
+        if y is not None:
+            assert x.shape[0] == y.shape[0], 'Data and label shape mismatch'
         self.x = x
         self.y = y
 
@@ -32,7 +33,10 @@ class MyDataset(Dataset):
         return len(self.x)
 
     def __getitem__(self, idx):
-        return torch.from_numpy(self.x[idx]), torch.from_numpy(self.y[idx])
+        if self.y is not None:
+            return torch.from_numpy(self.x[idx]), torch.from_numpy(self.y[idx])
+        else:
+            return torch.from_numpy(self.x[idx])
 
 
 def get_cifar10():

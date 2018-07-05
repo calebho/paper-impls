@@ -86,7 +86,7 @@ class GAN:
         for epoch in range(epochs):
             disc_cum_loss = 0.
             gen_cum_loss = 0.
-            for x, _ in loader:
+            for x in loader:
                 x = x.to(self.dev)
                 for _ in range(discriminator_iters):
                     noise = torch.rand(
@@ -115,15 +115,22 @@ class GAN:
             if verbose:
                 print('epoch', epoch, disc_cum_loss, gen_cum_loss)
 
-    def predict(self, noise):
-        return self.gen(noise).cpu().detach().numpy()
+    def predict(self, x):
+        return self.disc(x)
+
+    def evaluate(self, x, y):
+        yhat = self.predict(x).cpu().detach().numpy()
+        y = y.detach().numpy()
+        yhat[yhat[:, 0] > .5] = 1
+        yhat[yhat[:, 0] <= .5] = 0
+        return np.mean(y == yhat[:, 0])
+
+    def generate(self, noise):
+        return self.gen(noise)
 
 
 if __name__ == '__main__':
     train_x, train_y, test_x, test_y = get_mnist()
-    # join training and test sets since we're not classifying
-    train_x = np.concatenate([train_x, test_x])
-    train_y = np.concatenate([train_y, test_y])
 
     if torch.cuda.is_available():
         dev = torch.device('cuda')
@@ -133,16 +140,28 @@ if __name__ == '__main__':
     # generate 7's
     number = 7
     xs = train_x[train_y == number]
-    ys = np.reshape(train_y[train_y == number], (-1, 1))
-    dataset = MyDataset(xs, ys)
+    dataset = MyDataset(xs)
     m = GAN(device=dev)
     m.fit(dataset, epochs=128, verbose=False)
     num_gen = 5
     noise = torch.rand(num_gen, 256, device=dev)
-    y = np.reshape(m.predict(noise), (num_gen, 28, 28))
+    y = np.reshape(m.generate(noise).cpu().detach().numpy(), (num_gen, 28, 28))
     for i in range(num_gen):
         plt.imsave(
             'output/gan/im{:02d}.png'.format(i),
             y[i],
             cmap='gray',
             format='png')
+
+    real_x = torch.from_numpy(test_x[test_y == number]).to(dev)
+    num_gen = real_x.shape[0]
+    real_y = torch.ones(num_gen)
+    noise = torch.randn(num_gen, 256, device=dev)
+    gen_x = m.generate(noise)
+    gen_y = torch.zeros(num_gen)
+    eval_x = torch.cat((real_x, gen_x))
+    eval_y = torch.cat((real_y, gen_y))
+    print('test accuracy', m.evaluate(eval_x, eval_y))
+    loss = torch.nn.CrossEntropyLoss()
+    out = loss(m.predict(eval_x), eval_y.long().to(dev))
+    print('test loss', out.item())
