@@ -1,4 +1,26 @@
-"""Utility functions"""
+"""Utility classes and functions"""
+import torch
+
+
+class MyModuleList(torch.nn.ModuleList):
+    """Wrapper for easily composing modules and activation functions."""
+
+    def __init__(self, lst):
+        self.layers = []
+        self.activations = []
+        for layer_activations in lst:
+            self.layers.append(layer_activations[0])
+            self.activations.append(layer_activations[1:])
+        super().__init__(self.layers)
+
+    def compose_modules(self):
+        def f(x):
+            for layer, activations in zip(self.layers, self.activations):
+                x = layer(x)
+                for activation in activations:
+                    x = activation(x)
+            return x
+        return f
 
 
 def compose(f, g):

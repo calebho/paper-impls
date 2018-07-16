@@ -2,6 +2,7 @@
 
 https://arxiv.org/abs/1406.2661v1
 """
+import argparse
 import functools
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,60 +11,67 @@ import torch.nn.functional as F
 
 from datasets import MyDataset, get_mnist
 from torch.utils.data import DataLoader
-from utils import compose, interleave
+from utils import MyModuleList
 
 
 class Discriminator(torch.nn.Module):
     def __init__(self, input_dim):
         super().__init__()
-        self.layers = torch.nn.ModuleList([
-            torch.nn.Linear(input_dim, 128),
-            torch.nn.Linear(128, 64),
-            torch.nn.Linear(64, 2),
+        dropout = functools.partial(F.dropout, training=True, p=.3)
+        self.module_list = MyModuleList([
+            (torch.nn.Linear(input_dim, 1024), F.leaky_relu, dropout),
+            (torch.nn.Linear(1024, 512), F.leaky_relu, dropout),
+            (torch.nn.Linear(512, 256), F.leaky_relu, dropout),
+            (torch.nn.Linear(256, 1), F.sigmoid),
         ])
-        self.activations = [
-            F.relu,
-            F.relu,
-            functools.partial(F.log_softmax, dim=1),
-        ]
 
     def forward(self, x):
-        return functools.reduce(compose,
-                                interleave(self.layers, self.activations))(x)
+        return self.module_list.compose_modules()(x)
 
 
 class Generator(torch.nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
-        self.layers = torch.nn.ModuleList([
-            torch.nn.Linear(input_dim, 128),
-            torch.nn.Linear(128, output_dim),
+        self.module_list = MyModuleList([
+            (torch.nn.Linear(input_dim, 256), F.leaky_relu),
+            (torch.nn.Linear(256, 512), F.leaky_relu),
+            (torch.nn.Linear(512, 1024), F.leaky_relu),
+            (torch.nn.Linear(1024, output_dim), F.sigmoid),
         ])
-        self.activations = [
-            F.relu,
-            F.relu,
-        ]
 
     def forward(self, x):
-        return functools.reduce(compose,
-                                interleave(self.layers, self.activations))(x)
+        return self.module_list.compose_modules()(x)
 
 
 def discriminator_loss(y_pred, y_gen):
-    return -torch.mean(y_pred[:, 0] + torch.log(1 - torch.exp(y_gen[:, 0])))
+    label_pred = torch.ones_like(y_pred)
+    label_gen = torch.zeros_like(y_gen)
+    bce = torch.nn.BCELoss()
+    pred_loss = bce(y_pred, label_pred)
+    gen_loss = bce(y_gen, label_gen)
+    return pred_loss + gen_loss
 
 
 def generator_loss(y_gen):
-    return -torch.mean(y_gen[:, 0])
+    bce = torch.nn.BCELoss()
+    labels = torch.ones_like(y_gen)
+    return bce(y_gen, labels)
 
 
 class GAN:
-    def __init__(self, learning_rate=1e-4, device=None):
-        self.learning_rate = learning_rate
+    def __init__(self,
+                 data_dim,
+                 gen_input_dim=256,
+                 disc_learning_rate=1e-4,
+                 gen_learning_rate=1e-4,
+                 device=None):
+        self.disc_learning_rate = disc_learning_rate
+        self.gen_learning_rate = gen_learning_rate
 
-        self.gen_input_dim = 256
-        self.disc = Discriminator(28 * 28)
-        self.gen = Generator(self.gen_input_dim, 28 * 28)
+        self.data_dim = data_dim
+        self.gen_input_dim = gen_input_dim
+        self.disc = Discriminator(data_dim)
+        self.gen = Generator(self.gen_input_dim, data_dim)
         if device is None or str(device) != 'cuda':
             self.dev = torch.device('cpu')
         else:
@@ -72,9 +80,9 @@ class GAN:
             self.gen = self.gen.cuda()
 
         self.disc_optimizer = torch.optim.Adam(
-            self.disc.parameters(), lr=learning_rate)
+            self.disc.parameters(), lr=self.disc_learning_rate)
         self.gen_optimizer = torch.optim.Adam(
-            self.gen.parameters(), lr=learning_rate)
+            self.gen.parameters(), lr=self.gen_learning_rate)
 
     def fit(self,
             dataset,
@@ -88,8 +96,11 @@ class GAN:
             gen_cum_loss = 0.
             for x in loader:
                 x = x.to(self.dev)
+
+                # train discriminator
+                self.disc.train()
                 for _ in range(discriminator_iters):
-                    noise = torch.rand(
+                    noise = torch.randn(
                         batch_size, self.gen_input_dim, device=self.dev)
                     x_gen = self.gen(noise)
                     y_pred = self.disc(x)
@@ -104,7 +115,10 @@ class GAN:
                     self.disc_optimizer.zero_grad()
                     disc_loss.backward()
                     self.disc_optimizer.step()
-                noise = torch.rand(
+
+                # train generator
+                self.disc.eval()
+                noise = torch.randn(
                     batch_size, self.gen_input_dim, device=self.dev)
                 y_gen = self.disc(self.gen(noise))
                 gen_loss = generator_loss(y_gen)
@@ -116,7 +130,7 @@ class GAN:
                 print('epoch', epoch, disc_cum_loss, gen_cum_loss)
 
     def predict(self, x):
-        return self.disc(x)
+        return self.disc.eval()(x)
 
     def evaluate(self, x, y):
         yhat = self.predict(x).cpu().detach().numpy()
@@ -129,39 +143,91 @@ class GAN:
         return self.gen(noise)
 
 
+def make_mask(ys, labels):
+    mask = np.zeros_like(ys, dtype=bool)
+    for label in labels:
+        mask |= ys == label
+    return mask
+
+
 if __name__ == '__main__':
+    p = argparse.ArgumentParser(
+        description='Fit a GAN to MNIST',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument(
+        '-e',
+        '--epochs',
+        type=int,
+        default=32,
+        help='Number of training epochs.')
+    p.add_argument(
+        '-b',
+        '--batch-size',
+        type=int,
+        default=256,
+        help='Training batch size.')
+    p.add_argument(
+        '--gen-learning-rate',
+        type=float,
+        default=1e-4,
+        help='Generator learning rate.')
+    p.add_argument(
+        '--disc-learning-rate',
+        type=float,
+        default=1e-4,
+        help='Discriminator learning rate.')
+    p.add_argument(
+        '-g',
+        '--gen-input-dim',
+        type=int,
+        default=100,
+        help='Generator input dimension.')
+    p.add_argument(
+        '--num-gen',
+        type=int,
+        default=0,
+        help='Number of digits to generate after training.')
+    p.add_argument(
+        '-v',
+        '--verbose',
+        action='store_true',
+        help='Print losses after each epoch')
+    args = p.parse_args()
+
     train_x, train_y, test_x, test_y = get_mnist()
+    # normalize inputs to [0, 1]
+    train_x /= 255
+    test_x /= 255
 
     if torch.cuda.is_available():
         dev = torch.device('cuda')
     else:
         dev = torch.device('cpu')
 
-    # generate 7's
-    number = 7
-    xs = train_x[train_y == number]
+    numbers = range(10)  # subset of numbers to train on
+    train_mask = make_mask(train_y, numbers)
+    xs = train_x[train_mask]
     dataset = MyDataset(xs)
-    m = GAN(device=dev)
-    m.fit(dataset, epochs=128, verbose=False)
-    num_gen = 5
-    noise = torch.rand(num_gen, 256, device=dev)
-    y = np.reshape(m.generate(noise).cpu().detach().numpy(), (num_gen, 28, 28))
-    for i in range(num_gen):
-        plt.imsave(
-            'output/gan/im{:02d}.png'.format(i),
-            y[i],
-            cmap='gray',
-            format='png')
+    m = GAN(
+        28 * 28,
+        gen_input_dim=args.gen_input_dim,
+        disc_learning_rate=args.disc_learning_rate,
+        gen_learning_rate=args.gen_learning_rate,
+        device=dev)
+    m.fit(
+        dataset,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        verbose=args.verbose)
 
-    real_x = torch.from_numpy(test_x[test_y == number]).to(dev)
-    num_gen = real_x.shape[0]
-    real_y = torch.ones(num_gen)
-    noise = torch.randn(num_gen, 256, device=dev)
-    gen_x = m.generate(noise)
-    gen_y = torch.zeros(num_gen)
-    eval_x = torch.cat((real_x, gen_x))
-    eval_y = torch.cat((real_y, gen_y))
-    print('test accuracy', m.evaluate(eval_x, eval_y))
-    loss = torch.nn.CrossEntropyLoss()
-    out = loss(m.predict(eval_x), eval_y.long().to(dev))
-    print('test loss', out.item())
+    # generate digits and save
+    if args.num_gen:
+        noise = torch.randn(args.num_gen, args.gen_input_dim, device=dev)
+        y = np.reshape(
+            m.generate(noise).cpu().detach().numpy(), (args.num_gen, 28, 28))
+        for i in range(args.num_gen):
+            plt.imsave(
+                'output/gan/im{:02d}.png'.format(i),
+                y[i],
+                cmap='gray',
+                format='png')
