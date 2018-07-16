@@ -65,8 +65,7 @@ def get_cifar10():
         data = pickle.load(f, encoding='bytes')
         test_data = data[b'data'].astype(np.float32)
         test_labels = np.array(data[b'labels'], dtype=np.float32)
-    return (MyDataset(train_data, train_labels),
-            MyDataset(test_data, test_labels))
+    return train_data, train_labels, test_data, test_labels
 
 
 def get_mnist():
