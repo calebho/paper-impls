@@ -42,7 +42,7 @@ class AutoEncoder(torch.nn.Module):
 
 def elbo(mu, sigma2, log_prob):
     """Evidence lower bound (ELBO) for Gaussian prior and posterior"""
-    neg_kl_div = 5 * torch.mean(1 + torch.log(sigma2) - mu**2 - sigma2, 1)
+    neg_kl_div = .5 * torch.mean(1 + torch.log(sigma2) - mu**2 - sigma2, 1)
     neg_reconstruction_err = torch.mean(log_prob, 1)
     return torch.mean(neg_kl_div + neg_reconstruction_err)
 
