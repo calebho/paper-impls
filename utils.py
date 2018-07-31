@@ -1,4 +1,5 @@
 """Utility classes and functions"""
+import time
 import torch
 
 
@@ -36,3 +37,12 @@ def interleave(fst, snd):
         to_ret.append(x)
         to_ret.append(y)
     return to_ret
+
+
+def timeit(f):
+    def timed(*args, **kwargs):
+        t0 = time.time()
+        to_ret = f(*args, **kwargs)
+        print(f'time elapsed {time.time() - t0:.4} s')
+        return to_ret
+    return timed
