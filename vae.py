@@ -28,12 +28,13 @@ class AutoEncoder(torch.nn.Module):
         self.dec_fc2 = torch.nn.Linear(512, input_dim)
 
     def encode(self, x):
-        h = F.tanh(self.enc_fc1(x))
+        h = torch.tanh(self.enc_fc1(x))
         return self.enc_fc2(h), self.enc_fc3(h)
 
     def decode(self, mean, var):
         eps = torch.randn_like(var)
-        f = reduce(compose, [self.dec_fc1, self.dec_fc2, F.sigmoid])
+        f = reduce(compose,
+                   [self.dec_fc1, torch.relu, self.dec_fc2, torch.sigmoid])
         return f(mean + var * eps)
 
     def forward(self, x):
@@ -43,13 +44,15 @@ class AutoEncoder(torch.nn.Module):
         return mean, var, torch.stack(outs, dim=1)
 
 
-def neg_elbo(mu, sigma2, x, x_gen):
-    """Negative evidence lower bound (ELBO) for Gaussian prior and posterior"""
+def neg_elbo(mu, sigma2, x, x_gen, weight=.5):
+    """Negative evidence lower bound (ELBO) for Gaussian prior and Bernoulli
+    posterior
+    """
     kl_div = -.5 * torch.sum(1 + torch.log(sigma2) - mu**2 - sigma2)
     num_latent_samples = x_gen.shape[1]
     x = x.repeat(num_latent_samples, 1, 1).transpose(0, 1)
-    reconstruction_err = F.binary_cross_entropy(x_gen, x, size_average=False)
-    return kl_div + reconstruction_err
+    reconstruction_err = F.binary_cross_entropy(x_gen, x, reduction='sum')
+    return weight * kl_div + (1 - weight) * reconstruction_err
 
 
 class VAE:
@@ -73,7 +76,12 @@ class VAE:
         self.optimizer = torch.optim.Adam(
             self.ae.parameters(), lr=learning_rate)
 
-    def fit(self, dataset, epochs=40, batch_size=64, verbose=False):
+    def fit(self,
+            dataset,
+            epochs=40,
+            batch_size=64,
+            loss_weight=.5,
+            verbose=False):
         loader = DataLoader(dataset, batch_size)
         for epoch in range(epochs):
             cum_loss = 0.
@@ -82,7 +90,8 @@ class VAE:
             for x in loader:
                 x = x.to(self.dev)
                 mus, sigma2s, x_gen = self.ae(x)
-                loss = neg_elbo(mus, sigma2s, x, x_gen)
+                loss = len(dataset) / len(x) * neg_elbo(
+                    mus, sigma2s, x, x_gen, weight=loss_weight)
                 cum_loss += loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -90,8 +99,13 @@ class VAE:
             if verbose:
                 print('epoch', epoch, cum_loss)
 
+    @torch.no_grad()
     def generate(self, mean, var):
         return self.ae.decode(mean, var)
+
+    @torch.no_grad()
+    def latent_representation(self, x):
+        return self.ae.encode(x)
 
 
 if __name__ == '__main__':
