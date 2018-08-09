@@ -25,7 +25,7 @@ MNIST_URLS = [
 class MyDataset(Dataset):
     def __init__(self, x, y=None):
         if y is not None:
-            assert x.shape[0] == y.shape[0], 'Data and label shape mismatch'
+            assert len(x) == len(y), 'Data and label shape mismatch'
         self.x = x
         self.y = y
 
@@ -88,6 +88,16 @@ def get_mnist():
     test_labels = test_labels.astype(np.float32)
 
     return train_data, train_labels, test_data, test_labels
+
+
+def get_rand_vector_sequence(min_len=1, max_len=21, vsize=8, num_samples=100):
+    """Get a set of random vector sequences of length [`min_len`, `max_len`)
+    """
+    sequence_lens = np.random.randint(min_len, max_len, size=(num_samples, ))
+    return [
+        np.random.randint(0, 2, size=(seq_len, 1, vsize)).astype(np.float32)
+        for seq_len in sequence_lens
+    ]
 
 
 if __name__ == '__main__':
